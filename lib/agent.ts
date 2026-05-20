@@ -6,10 +6,40 @@ import {
 } from "ai";
 import { z } from "zod";
 import { ApiRequestError, getProducts, getCategories, getProductById } from "@/lib/api";
+import { start } from "workflow/api";
+import { returnFlow } from "./workflows/return-flow";
 
 export type ShoppingAgentUIMessage = InferAgentUIMessage<typeof shoppingAgent>;
 export type ProductDetailsToolInvocation = UIToolInvocation<typeof getProductDetails>;
 export type SearchProductsToolInvocation = UIToolInvocation<typeof searchProducts>;
+
+const processReturn = tool({
+  description: `File a return for one of the user's orders. The user must provide an order ID. Valid order IDs in this demo are 11111, 22222, 33333, 44444, 55555. Returns immediately.`,
+  inputSchema: z.object({
+    orderId: z
+      .string()
+      .describe("The order ID the user wants to return."),
+    reason: z
+      .string()
+      .min(10)
+      .max(500)
+      .describe("Why the user is returning the order."),
+  }),
+  execute: async ({ orderId, reason }) => {
+    try {
+      const run = await start(returnFlow, [orderId, reason]);
+      return {
+        runId: run.runId,
+        message: `Return filed for order ${orderId}.`,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      return { error: message };
+    }
+  },
+});
+
+// the rest of the code
 
 const getProductDetails = tool({
     description: `Get detailed information about a specific product in the Vercel swag store. Use this when the user asks for more information about a specific product, e.g. "Tell me more about the Vercel hoodie".`,
@@ -106,8 +136,10 @@ const searchProducts = tool({
 
 export const shoppingAgent = new ToolLoopAgent({
     model: "anthropic/claude-sonnet-4.6",
-    instructions: `You are a friendly shopping assistant for the Vercel swag store.
-    If the user asks about a specific product, use the getProductDetails tool to retrieve information about it.
-    `,
-    tools: { searchProducts, getAllCategories, getProductDetails },
+    instructions: `You are a helpful assistant for the Vercel swag store.
+  When the user asks about products, availability, or recommendations, use the searchProducts tool to look up real catalog data before answering.
+  When asked about a type or category of product use the getAllCategories tool for getting valid categories before using searchProducts.
+  When the user asks about a specific product use the getProductDetails tool for getting details. You can find the ID or slug after using searchProducts.
+  When the user wants to return an order use the processReturn tool. Ask for the order ID and reason if they haven't given them. Valid demo order IDs are 11111-55555.`,
+    tools: { searchProducts, getAllCategories, getProductDetails, processReturn },
 });
